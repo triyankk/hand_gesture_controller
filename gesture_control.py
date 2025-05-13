@@ -46,9 +46,20 @@ class GestureController:
         self.gesture_confidence = 0.0
         self.hover_start_time = 0
         self.hover_position = None
-        self.hover_threshold = 2.0  # seconds
+        self.hover_threshold = 1.0  # reduced to 1 second
         self.movement_tolerance = 20  # pixels
-        self.hover_feedback_color = (0, 255, 255)  # Yellow color for hover feedback
+        self.hover_feedback_color = (0, 255, 255)
+        # Create overlay window for cursor feedback
+        self.overlay_name = "Cursor Overlay"
+        cv2.namedWindow(self.overlay_name, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(self.overlay_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        # Make overlay window transparent and click-through
+        hwnd = win32gui.FindWindow(None, self.overlay_name)
+        styles = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
+                             styles | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT | win32con.WS_EX_TOPMOST)
+        # Create transparent overlay
+        self.overlay = np.zeros((self.screen_height, self.screen_width, 4), dtype=np.uint8)
 
     def create_border_window(self):
         # Register window class
@@ -240,55 +251,48 @@ class GestureController:
 
     def process_hand_landmarks(self, hand_landmarks, image, frame_height, frame_width):
         if self.is_index_pointing(hand_landmarks):
-            # Get current cursor position
-            index_tip = hand_landmarks.landmark[8]
-            current_x = int(index_tip.x * self.screen_width)
-            current_y = int(index_tip.y * self.screen_height)
-            current_pos = (current_x, current_y)
-
-            # Smooth cursor movement
-            self.cursor_x = self.cursor_x + (current_x - self.cursor_x) * self.smoothing
-            self.cursor_y = self.cursor_y + (current_y - self.cursor_y) * self.smoothing
+            # Clear previous overlay
+            self.overlay.fill(0)
             
-            # Move cursor
-            pyautogui.moveTo(int(self.cursor_x), int(self.cursor_y), _pause=False)
+            # Get current cursor position
+            current_x = int(self.cursor_x)
+            current_y = int(self.cursor_y)
+            current_pos = (current_x, current_y)
 
             # Handle hover detection
             current_time = time.time()
             
             if self.hover_position:
                 if self.is_within_tolerance(current_pos, self.hover_position):
-                    # Still within tolerance of hover position
                     hover_duration = current_time - self.hover_start_time
                     if hover_duration >= self.hover_threshold:
-                        # Perform click
                         pyautogui.click()
-                        # Reset hover state
                         self.hover_position = None
                         self.hover_start_time = 0
                     else:
                         # Draw hover feedback
-                        screen_x = int(self.cursor_x)
-                        screen_y = int(self.cursor_y)
                         progress = hover_duration / self.hover_threshold
                         radius = int(self.movement_tolerance * (1 - progress))
-                        cv2.circle(image, (screen_x, screen_y), radius, 
-                                 self.hover_feedback_color, 2)
+                        # Draw circle on overlay
+                        cv2.circle(self.overlay, 
+                                 (current_x, current_y), 
+                                 radius,
+                                 (0, 255, 255, 255), 2)
+                        # Show overlay
+                        cv2.imshow(self.overlay_name, self.overlay)
                 else:
-                    # Moved outside tolerance
                     self.hover_position = current_pos
                     self.hover_start_time = current_time
             else:
-                # Start new hover
                 self.hover_position = current_pos
                 self.hover_start_time = current_time
 
-            if self.debug_mode:
-                cv2.putText(image, f"Hover: {time.time() - self.hover_start_time:.1f}s", 
-                           (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
+            # Move cursor
+            pyautogui.moveTo(current_x, current_y, _pause=False)
         else:
-            # Reset hover state when not pointing
+            # Clear overlay when not pointing
+            self.overlay.fill(0)
+            cv2.imshow(self.overlay_name, self.overlay)
             self.hover_position = None
             self.hover_start_time = 0
 
@@ -349,6 +353,9 @@ class GestureController:
             return hand_landmarks.landmark[tip].y < hand_landmarks.landmark[pip].y
         except (AttributeError, IndexError):
             return False
+
+    def __del__(self):
+        cv2.destroyWindow(self.overlay_name)
 
 if __name__ == "__main__":
     controller = GestureController()
